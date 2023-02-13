@@ -1,0 +1,29 @@
+#!/bin/bash
+
+# Check and create .ssh folder
+if [ ! -d ~/.ssh ]; then
+    mkdir ~/.ssh
+    chmod 700 ~/.ssh
+fi
+
+# Add ssh key
+echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJPz1R5Ubh/HvnylrJR+WuoVGlqYl9MC/4BIzz0jxzTa eddsa-key-General" >> ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
+
+# Change ssh port
+if [ -f /etc/ssh/sshd_config ]; then
+    sed -i 's/#Port 22/Port 54321/g' /etc/ssh/sshd_config
+    sed -i 's/Port 22/Port 54321/g' /etc/ssh/sshd_config
+fi
+
+# Disable password login
+if [ -f /etc/ssh/sshd_config ]; then
+    sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/g' /etc/ssh/sshd_config
+    sed -i 's/PasswordAuthentication yes/PasswordAuthentication no/g' /etc/ssh/sshd_config
+fi
+
+# Restart sshd service
+systemctl restart ssh
+
+# Remove self
+rm -- "$0"
