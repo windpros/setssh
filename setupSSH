@@ -22,8 +22,16 @@ if [ -f /etc/ssh/sshd_config ]; then
     sed -i 's/PasswordAuthentication yes/PasswordAuthentication no/g' /etc/ssh/sshd_config
 fi
 
+# Allow root login via SSH
+if [ -f /etc/ssh/sshd_config ]; then
+    sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/g' /etc/ssh/sshd_config
+    sed -i 's/PermitRootLogin prohibit-password/PermitRootLogin yes/g' /etc/ssh/sshd_config
+fi
+
 # Restart sshd service
 systemctl restart ssh
+
+echo "已完成。新的登入端口为54321，已禁用密码，下次登入请使用密钥。"
 
 # Remove self
 rm -- "$0"
