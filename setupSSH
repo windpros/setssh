@@ -31,7 +31,7 @@ fi
 # Restart sshd service
 systemctl restart ssh
 
-echo "已完成。新的登入端口为54321，已禁用密码，下次登入请使用密钥。"
-
 # Remove self
 rm -- "$0"
+
+echo "Setup complete. SSH port is set to 54321, password authentication is disabled, and root login via SSH is allowed."
