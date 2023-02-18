@@ -1,5 +1,5 @@
 #!/bin/bash
-
+cd ~
 # Check and create .ssh folder
 if [ ! -d ~/.ssh ]; then
     mkdir ~/.ssh
