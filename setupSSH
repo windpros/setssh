@@ -35,7 +35,7 @@ if [ -f /etc/ssh/sshd_config ]; then
 fi
 
 # Restart sshd service
-systemctl restart ssh
+systemctl restart sshd
 
 # Remove self
 rm -- "$0"
