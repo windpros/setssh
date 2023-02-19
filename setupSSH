@@ -6,9 +6,16 @@ if [ ! -d ~/.ssh ]; then
     chmod 700 ~/.ssh
 fi
 
-# Add ssh key
-echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJPz1R5Ubh/HvnylrJR+WuoVGlqYl9MC/4BIzz0jxzTa eddsa-key-General" >> ~/.ssh/authorized_keys
-chmod 600 ~/.ssh/authorized_keys
+# Check if authorized_keys file exists and if not, create it
+if [ ! -f ~/.ssh/authorized_keys ]; then
+    touch ~/.ssh/authorized_keys
+    chmod 600 ~/.ssh/authorized_keys
+fi
+
+# Check if public key already exists and if not, add it
+if ! grep -q "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJPz1R5Ubh/HvnylrJR+WuoVGlqYl9MC/4BIzz0jxzTa eddsa-key-General" ~/.ssh/authorized_keys; then
+    echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJPz1R5Ubh/HvnylrJR+WuoVGlqYl9MC/4BIzz0jxzTa eddsa-key-General" >> ~/.ssh/authorized_keys
+fi
 
 # Change ssh port
 if [ -f /etc/ssh/sshd_config ]; then
