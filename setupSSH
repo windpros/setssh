@@ -127,6 +127,7 @@ if ! grep -q "export EDITOR=nano" /etc/profile; then
 fi
 
 export EDITOR=nano
+source ~/.bashrc
 
 # =====================================
 # 7. 配置 SSH 密钥
