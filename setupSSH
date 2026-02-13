@@ -70,11 +70,12 @@ fi
 # =====================================
 echo "检查 BBR 状态..."
 
-# 检查内核版本
-KERNEL_VERSION=$(uname -r | cut -d. -f1-2)
-REQUIRED_VERSION="4.9"
+# 提取主版本号和次版本号
+KERNEL_MAJOR=$(uname -r | cut -d. -f1)
+KERNEL_MINOR=$(uname -r | cut -d. -f2)
 
-if awk "BEGIN {exit !($KERNEL_VERSION >= $REQUIRED_VERSION)}"; then
+# BBR 需要内核 >= 4.9
+if [ "$KERNEL_MAJOR" -gt 4 ] || { [ "$KERNEL_MAJOR" -eq 4 ] && [ "$KERNEL_MINOR" -ge 9 ]; }; then
     
     # 检查当前拥塞控制算法
     current_cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "none")
@@ -113,7 +114,7 @@ if awk "BEGIN {exit !($KERNEL_VERSION >= $REQUIRED_VERSION)}"; then
         fi
     fi
 else
-    echo "⚠️  内核版本过低 (当前: $KERNEL_VERSION, 需要: >= $REQUIRED_VERSION)"
+    echo "⚠️  内核版本过低 (当前: $KERNEL_MAJOR.$KERNEL_MINOR, 需要: >= 4.9)"
     echo "BBR 需要内核版本 4.9 或更高，请升级内核"
 fi
 
