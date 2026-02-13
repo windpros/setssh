@@ -1,181 +1,74 @@
 #!/bin/bash
-set -e
 
-# =====================================
-# 0. Root 权限检查
-# =====================================
-if [ "$EUID" -ne 0 ]; then
-    echo "请使用 root 权限运行此脚本！"
-    exit 1
-fi
+# 1. 设置时区为上海
+echo "正在设置时区..."
+timedatectl set-timezone Asia/Shanghai
 
-echo "========== 开始系统初始化 =========="
-
-# =====================================
-# 自动识别包管理器
-# =====================================
-if command -v dnf &>/dev/null; then
-    PM="dnf"
-else
-    PM="yum"
-fi
-
-# =====================================
-# 1. 设置时区
-# =====================================
-echo "正在设置时区为 Asia/Shanghai..."
-timedatectl set-timezone Asia/Shanghai 2>/dev/null || true
-
-# =====================================
-# 2. 设置 24 小时制
-# =====================================
-if ! locale | grep -q "LC_TIME=en_GB.UTF-8"; then
-    echo "正在设置时间格式为 24 小时制..."
+# 2. 检查并设置 24 小时制 (CST)
+if [[ $(date) != *"CST"* ]] || [[ $(date +%H) == "" ]]; then
+    echo "正在设置本地化时间格式为 en_GB.UTF-8..."
     localectl set-locale LC_TIME="en_GB.UTF-8"
     export LC_TIME="en_GB.UTF-8"
-else
-    echo "时间格式已为 24 小时制"
 fi
 
-# =====================================
-# 3. 安装必要软件
-# =====================================
-echo "检查并安装必要软件包..."
+# 3. 检查并安装必要软件包
 PACKAGES=("wget" "nano" "epel-release")
-
+echo "正在检查软件包..."
 for pkg in "${PACKAGES[@]}"; do
     if ! rpm -q $pkg &>/dev/null; then
-        echo "安装 $pkg ..."
-        $PM install -y $pkg
-    else
-        echo "$pkg 已安装"
+        echo "正在安装 $pkg..."
+        yum install -y $pkg
     fi
 done
 
-# =====================================
 # 4. 关闭 SELinux
-# =====================================
-if command -v getenforce &>/dev/null; then
-    if [ "$(getenforce)" != "Disabled" ]; then
-        echo "正在关闭 SELinux..."
-        sed -i 's/^SELINUX=.*/SELINUX=disabled/' /etc/selinux/config
-        setenforce 0 2>/dev/null || true
-    else
-        echo "SELinux 已关闭"
-    fi
+echo "正在关闭 SELinux..."
+if [ -f /etc/selinux/config ]; then
+    sed -i 's/^SELINUX=.*/SELINUX=disabled/' /etc/selinux/config
+    setenforce 0 2>/dev/null
 fi
 
-# =====================================
-# 5. 检查并开启 BBR
-# =====================================
-echo "检查 BBR 状态..."
-
-# 提取主版本号和次版本号
-KERNEL_MAJOR=$(uname -r | cut -d. -f1)
-KERNEL_MINOR=$(uname -r | cut -d. -f2)
-
-# BBR 需要内核 >= 4.9
-if [ "$KERNEL_MAJOR" -gt 4 ] || { [ "$KERNEL_MAJOR" -eq 4 ] && [ "$KERNEL_MINOR" -ge 9 ]; }; then
-    
-    # 检查当前拥塞控制算法
-    current_cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "none")
-    
-    if [[ "$current_cc" == "bbr" ]]; then
-        echo "BBR 已开启 ✅"
-        echo "当前拥塞控制算法: $current_cc"
-    else
-        # 检查系统是否支持 BBR
-        available_cc=$(sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null || echo "")
-        
-        if [[ "$available_cc" == *"bbr"* ]]; then
-            echo "正在开启 BBR..."
-            
-            # 添加配置（避免重复）
-            grep -q "^net.core.default_qdisc=fq" /etc/sysctl.conf || \
-                echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
-            
-            grep -q "^net.ipv4.tcp_congestion_control=bbr" /etc/sysctl.conf || \
-                echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
-            
-            # 立即应用
-            sysctl -w net.core.default_qdisc=fq
-            sysctl -w net.ipv4.tcp_congestion_control=bbr
-            
-            # 验证是否成功
-            current_cc=$(sysctl -n net.ipv4.tcp_congestion_control)
-            if [[ "$current_cc" == "bbr" ]]; then
-                echo "BBR 已成功开启 ✅"
-            else
-                echo "BBR 开启失败，建议重启服务器后生效"
-            fi
-        else
-            echo "⚠️  内核不支持 BBR（可能需要加载模块或重启）"
-            echo "建议重启服务器后再次运行脚本检查"
-        fi
-    fi
-else
-    echo "⚠️  内核版本过低 (当前: $KERNEL_MAJOR.$KERNEL_MINOR, 需要: >= 4.9)"
-    echo "BBR 需要内核版本 4.9 或更高，请升级内核"
+# 5. 开启 BBR 加速
+echo "正在检查 BBR 状态..."
+if ! sysctl net.ipv4.tcp_congestion_control | grep -q "bbr"; then
+    echo "正在开启 BBR..."
+    echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
+    echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
+    sysctl -p
 fi
 
-# =====================================
-# 6. 设置默认编辑器
-# =====================================
+# 6. 设置默认编辑器为 nano
 echo "设置 nano 为默认编辑器..."
-
-if ! grep -q "export EDITOR=nano" /etc/profile; then
+if ! grep -q "EDITOR=nano" /etc/profile; then
     echo 'export EDITOR=nano' >> /etc/profile
+    export EDITOR=nano
 fi
 
-export EDITOR=nano
-
-# =====================================
-# 7. 配置 SSH 密钥
-# =====================================
+# 7. SSH 密钥目录与权限配置
 echo "配置 SSH 密钥..."
-
-mkdir -p ~/.ssh
-chmod 700 ~/.ssh
-
-touch ~/.ssh/authorized_keys
-chmod 600 ~/.ssh/authorized_keys
+[ ! -d ~/.ssh ] && mkdir -m 700 ~/.ssh
+[ ! -f ~/.ssh/authorized_keys ] && touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
 
 PUB_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJPz1R5Ubh/HvnylrJR+WuoVGlqYl9MC/4BIzz0jxzTa eddsa-key-General"
-
 if ! grep -q "$PUB_KEY" ~/.ssh/authorized_keys; then
     echo "$PUB_KEY" >> ~/.ssh/authorized_keys
-    echo "SSH 公钥已添加"
-else
-    echo "SSH 公钥已存在"
 fi
 
-# =====================================
 # 8. 修改 SSH 配置
-# =====================================
-echo "修改 SSH 配置 (端口: 54321)..."
-
-SSHD_CONFIG="/etc/ssh/sshd_config"
-
-if [ -f "$SSHD_CONFIG" ]; then
-
-    sed -i 's/^#\?Port .*/Port 54321/' "$SSHD_CONFIG"
-    sed -i 's/^#\?PasswordAuthentication .*/PasswordAuthentication no/' "$SSHD_CONFIG"
-    sed -i 's/^#\?PermitRootLogin .*/PermitRootLogin yes/' "$SSHD_CONFIG"
-
+echo "正在修改 SSH 配置 (端口: 54321)..."
+if [ -f /etc/ssh/sshd_config ]; then
+    # 统一修改端口、禁用密码登录、允许Root密钥登录
+    sed -i 's/^#\?Port.*/Port 54321/g' /etc/ssh/sshd_config
+    sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/g' /etc/ssh/sshd_config
+    sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/g' /etc/ssh/sshd_config
+    
     systemctl restart sshd
-    echo "SSH 已重启"
 fi
 
-# =====================================
-# 完成提示
-# =====================================
-echo "---------------------------------"
-echo "系统初始化完成！"
-echo "SSH 端口: 54321"
-echo "请确认已放行防火墙端口 54321"
-echo "---------------------------------"
+echo "---"
+echo "配置完成！"
+echo "警告：请确保已放行 54321 端口，否则将无法连接。"
 
-# =====================================
-# 删除自身
-# =====================================
+# 9. 删除脚本自身
+echo "正在清理安装脚本..."
 rm -f "$0"
