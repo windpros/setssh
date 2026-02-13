@@ -121,13 +121,18 @@ fi
 # 6. 设置默认编辑器
 # =====================================
 echo "设置 nano 为默认编辑器..."
-
-if ! grep -q "export EDITOR=nano" /etc/profile; then
-    echo 'export EDITOR=nano' >> /etc/profile
+if [ -f /usr/bin/nano ]; then
+    # 尝试 Debian/Ubuntu 规范做法
+    update-alternatives --set editor /usr/bin/nano 2>/dev/null
+    
+    # 强制覆盖全局 profile 文件夹（CentOS/PT 常用）
+    echo 'export EDITOR=nano' > /etc/profile.d/nano_editor.sh
+    echo 'export VISUAL=nano' >> /etc/profile.d/nano_editor.sh
+    
+    # 为当前会话及其后的 crontab 强制生效
+    export EDITOR=nano
+    export VISUAL=nano
 fi
-
-export EDITOR=nano
-source ~/.bashrc
 
 # =====================================
 # 7. 配置 SSH 密钥
