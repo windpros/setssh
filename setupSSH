@@ -1,43 +1,160 @@
 #!/bin/bash
-# Check and create .ssh folder
-if [ ! -d ~/.ssh ]; then
-    mkdir ~/.ssh
-    chmod 700 ~/.ssh
+set -e
+
+# =====================================
+# 0. Root 权限检查
+# =====================================
+if [ "$EUID" -ne 0 ]; then
+    echo "请使用 root 权限运行此脚本！"
+    exit 1
 fi
 
-# Check if authorized_keys file exists and if not, create it
-if [ ! -f ~/.ssh/authorized_keys ]; then
-    touch ~/.ssh/authorized_keys
-    chmod 600 ~/.ssh/authorized_keys
+echo "========== 开始系统初始化 =========="
+
+# =====================================
+# 自动识别包管理器
+# =====================================
+if command -v dnf &>/dev/null; then
+    PM="dnf"
+else
+    PM="yum"
 fi
 
-# Check if public key already exists and if not, add it
-if ! grep -q "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJPz1R5Ubh/HvnylrJR+WuoVGlqYl9MC/4BIzz0jxzTa eddsa-key-General" ~/.ssh/authorized_keys; then
-    echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJPz1R5Ubh/HvnylrJR+WuoVGlqYl9MC/4BIzz0jxzTa eddsa-key-General" >> ~/.ssh/authorized_keys
+# =====================================
+# 1. 设置时区
+# =====================================
+echo "正在设置时区为 Asia/Shanghai..."
+timedatectl set-timezone Asia/Shanghai 2>/dev/null || true
+
+# =====================================
+# 2. 设置 24 小时制
+# =====================================
+if ! locale | grep -q "LC_TIME=en_GB.UTF-8"; then
+    echo "正在设置时间格式为 24 小时制..."
+    localectl set-locale LC_TIME="en_GB.UTF-8"
+    export LC_TIME="en_GB.UTF-8"
+else
+    echo "时间格式已为 24 小时制"
 fi
 
-# Change ssh port
-if [ -f /etc/ssh/sshd_config ]; then
-    sed -i 's/#Port 22/Port 54321/g' /etc/ssh/sshd_config
-    sed -i 's/Port 22/Port 54321/g' /etc/ssh/sshd_config
+# =====================================
+# 3. 安装必要软件
+# =====================================
+echo "检查并安装必要软件包..."
+PACKAGES=("wget" "nano" "epel-release")
+
+for pkg in "${PACKAGES[@]}"; do
+    if ! rpm -q $pkg &>/dev/null; then
+        echo "安装 $pkg ..."
+        $PM install -y $pkg
+    else
+        echo "$pkg 已安装"
+    fi
+done
+
+# =====================================
+# 4. 关闭 SELinux
+# =====================================
+if command -v getenforce &>/dev/null; then
+    if [ "$(getenforce)" != "Disabled" ]; then
+        echo "正在关闭 SELinux..."
+        sed -i 's/^SELINUX=.*/SELINUX=disabled/' /etc/selinux/config
+        setenforce 0 2>/dev/null || true
+    else
+        echo "SELinux 已关闭"
+    fi
 fi
 
-# Disable password login
-if [ -f /etc/ssh/sshd_config ]; then
-    sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/g' /etc/ssh/sshd_config
-    sed -i 's/PasswordAuthentication yes/PasswordAuthentication no/g' /etc/ssh/sshd_config
+# =====================================
+# 5. 检查并开启 BBR
+# =====================================
+echo "检查 BBR 状态..."
+
+current_cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "none")
+available_cc=$(sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null || echo "")
+bbr_module=$(lsmod | grep -w bbr || true)
+
+if [[ "$current_cc" == "bbr" ]] && [[ -n "$bbr_module" ]]; then
+    echo "BBR 已开启 ✅"
+    echo "当前拥塞控制算法: $current_cc"
+else
+    if [[ "$available_cc" == *"bbr"* ]]; then
+        echo "正在开启 BBR..."
+
+        if ! grep -q "^net.core.default_qdisc=fq" /etc/sysctl.conf; then
+            echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
+        fi
+
+        if ! grep -q "^net.ipv4.tcp_congestion_control=bbr" /etc/sysctl.conf; then
+            echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
+        fi
+
+        sysctl -p
+        echo "BBR 已开启完成 ✅"
+        echo "建议重启服务器以完全生效"
+    else
+        echo "当前内核不支持 BBR，请升级内核后再尝试。"
+    fi
 fi
 
-# Allow root login via SSH
-if [ -f /etc/ssh/sshd_config ]; then
-    sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/g' /etc/ssh/sshd_config
-    sed -i 's/PermitRootLogin prohibit-password/PermitRootLogin yes/g' /etc/ssh/sshd_config
+# =====================================
+# 6. 设置默认编辑器
+# =====================================
+echo "设置 nano 为默认编辑器..."
+
+if ! grep -q "export EDITOR=nano" /etc/profile; then
+    echo 'export EDITOR=nano' >> /etc/profile
 fi
 
-# Restart sshd service
-systemctl restart sshd
+export EDITOR=nano
 
-# Remove self
-rm -- "$0"
+# =====================================
+# 7. 配置 SSH 密钥
+# =====================================
+echo "配置 SSH 密钥..."
 
-echo "Setup complete. SSH port is set to 54321, password authentication is disabled, and root login via SSH is allowed."
+mkdir -p ~/.ssh
+chmod 700 ~/.ssh
+
+touch ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
+
+PUB_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJPz1R5Ubh/HvnylrJR+WuoVGlqYl9MC/4BIzz0jxzTa eddsa-key-General"
+
+if ! grep -q "$PUB_KEY" ~/.ssh/authorized_keys; then
+    echo "$PUB_KEY" >> ~/.ssh/authorized_keys
+    echo "SSH 公钥已添加"
+else
+    echo "SSH 公钥已存在"
+fi
+
+# =====================================
+# 8. 修改 SSH 配置
+# =====================================
+echo "修改 SSH 配置 (端口: 54321)..."
+
+SSHD_CONFIG="/etc/ssh/sshd_config"
+
+if [ -f "$SSHD_CONFIG" ]; then
+
+    sed -i 's/^#\?Port .*/Port 54321/' "$SSHD_CONFIG"
+    sed -i 's/^#\?PasswordAuthentication .*/PasswordAuthentication no/' "$SSHD_CONFIG"
+    sed -i 's/^#\?PermitRootLogin .*/PermitRootLogin yes/' "$SSHD_CONFIG"
+
+    systemctl restart sshd
+    echo "SSH 已重启"
+fi
+
+# =====================================
+# 完成提示
+# =====================================
+echo "---------------------------------"
+echo "系统初始化完成！"
+echo "SSH 端口: 54321"
+echo "请确认已放行防火墙端口 54321"
+echo "---------------------------------"
+
+# =====================================
+# 删除自身
+# =====================================
+rm -f "$0"
