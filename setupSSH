@@ -1,88 +1,103 @@
 #!/bin/bash
+#
+# System Configuration Script (optimized)
+#
+set -uo pipefail
+
+# ==============================================================
+# 配置区：请在运行前修改这里
+# ==============================================================
+SSH_PORT=54321
+SSH_PUBLIC_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJPz1R5Ubh/HvnylrJR+WuoVGlqYl9MC/4BIzz0jxzTa"
+# ==============================================================
 
 echo "=========================================="
 echo "  System Configuration Script"
 echo "=========================================="
 echo ""
 
-# Set timezone to Asia/Shanghai
+# --------------------------------------------------------------
+# [1/8] Timezone
+# --------------------------------------------------------------
 echo "[1/8] Setting timezone to Asia/Shanghai..."
 timedatectl set-timezone Asia/Shanghai
 echo "✓ Timezone set to: $(timedatectl | grep "Time zone" | awk '{print $3}')"
 echo ""
 
-# Configure locale to C.UTF-8
+# --------------------------------------------------------------
+# [2/8] Locale
+# --------------------------------------------------------------
 echo "[2/8] Configuring global locale to C.UTF-8..."
 
-# Check if localectl is available
 if command -v localectl &> /dev/null; then
-    # Use localectl for systemd-based systems
     localectl set-locale LANG=C.UTF-8
     echo "✓ Locale set via localectl"
 else
-    # Fallback for non-systemd systems
     echo "localectl not found, using fallback method"
 fi
 
-# Update /etc/environment
 if [ -f /etc/environment ]; then
-    if ! grep -q "LANG=C.UTF-8" /etc/environment; then
+    if ! grep -q "^LANG=" /etc/environment; then
         echo "LANG=C.UTF-8" >> /etc/environment
-        echo "LC_ALL=C.UTF-8" >> /etc/environment
     else
         sed -i 's/^LANG=.*/LANG=C.UTF-8/g' /etc/environment
-        if ! grep -q "LC_ALL=C.UTF-8" /etc/environment; then
-            echo "LC_ALL=C.UTF-8" >> /etc/environment
-        fi
+    fi
+    if ! grep -q "^LC_ALL=" /etc/environment; then
+        echo "LC_ALL=C.UTF-8" >> /etc/environment
+    else
+        sed -i 's/^LC_ALL=.*/LC_ALL=C.UTF-8/g' /etc/environment
     fi
     echo "✓ Updated /etc/environment"
 else
-    echo "LANG=C.UTF-8" > /etc/environment
-    echo "LC_ALL=C.UTF-8" >> /etc/environment
+    printf 'LANG=C.UTF-8\nLC_ALL=C.UTF-8\n' > /etc/environment
     echo "✓ Created /etc/environment"
 fi
 
-# Update /etc/default/locale if it exists (Debian/Ubuntu)
 if [ -d /etc/default ]; then
-    echo "LANG=C.UTF-8" > /etc/default/locale
-    echo "LC_ALL=C.UTF-8" >> /etc/default/locale
+    printf 'LANG=C.UTF-8\nLC_ALL=C.UTF-8\n' > /etc/default/locale
     echo "✓ Updated /etc/default/locale"
 fi
 
-# Update /etc/locale.conf (RHEL/CentOS/Fedora)
-echo "LANG=C.UTF-8" > /etc/locale.conf
-echo "LC_ALL=C.UTF-8" >> /etc/locale.conf
+printf 'LANG=C.UTF-8\nLC_ALL=C.UTF-8\n' > /etc/locale.conf
 echo "✓ Updated /etc/locale.conf"
 
-# Export for current session
 export LANG=C.UTF-8
 export LC_ALL=C.UTF-8
 echo "✓ Locale exported for current session"
 
-# Add to /etc/profile for all users
-if ! grep -q "export LANG=C.UTF-8" /etc/profile; then
-    echo "" >> /etc/profile
-    echo "# Set locale to C.UTF-8" >> /etc/profile
-    echo "export LANG=C.UTF-8" >> /etc/profile
-    echo "export LC_ALL=C.UTF-8" >> /etc/profile
+if ! grep -q "export LANG=C.UTF-8" /etc/profile 2>/dev/null; then
+    {
+        echo ""
+        echo "# Set locale to C.UTF-8"
+        echo "export LANG=C.UTF-8"
+        echo "export LC_ALL=C.UTF-8"
+    } >> /etc/profile
     echo "✓ Added locale to /etc/profile"
 fi
 
 echo "Current locale: $(locale | grep LANG= | head -1)"
 echo ""
 
-# Check and install nano if not installed
+# --------------------------------------------------------------
+# [3/8] nano
+# --------------------------------------------------------------
 echo "[3/8] Checking for nano..."
 if ! command -v nano &> /dev/null; then
     echo "nano not found. Installing..."
-    yum install -y nano 2>/dev/null || apt-get install -y nano 2>/dev/null
+    if command -v apt-get &> /dev/null; then
+        apt-get update -qq && apt-get install -y nano
+    elif command -v yum &> /dev/null; then
+        yum install -y nano
+    fi
     echo "✓ nano installed successfully"
 else
     echo "✓ nano is already installed"
 fi
 echo ""
 
-# Check and install epel-release if not installed (for CentOS/RHEL)
+# --------------------------------------------------------------
+# [4/8] epel-release (RHEL/CentOS only)
+# --------------------------------------------------------------
 echo "[4/8] Checking for epel-release..."
 if command -v yum &> /dev/null; then
     if ! rpm -q epel-release &> /dev/null; then
@@ -97,19 +112,17 @@ else
 fi
 echo ""
 
-# Check and disable SELinux
+# --------------------------------------------------------------
+# [5/8] SELinux
+# --------------------------------------------------------------
 echo "[5/8] Checking SELinux status..."
 if command -v getenforce &> /dev/null; then
     selinux_status=$(getenforce)
     echo "Current SELinux status: $selinux_status"
-    
+
     if [ "$selinux_status" != "Disabled" ]; then
         echo "Disabling SELinux..."
-        
-        # Disable SELinux temporarily
-        setenforce 0 2>/dev/null
-        
-        # Disable SELinux permanently
+        setenforce 0 2>/dev/null || true
         if [ -f /etc/selinux/config ]; then
             sed -i 's/^SELINUX=enforcing/SELINUX=disabled/g' /etc/selinux/config
             sed -i 's/^SELINUX=permissive/SELINUX=disabled/g' /etc/selinux/config
@@ -125,85 +138,127 @@ else
 fi
 echo ""
 
-# Configure SSH
+# --------------------------------------------------------------
+# [6/8] SSH — using sshd_config.d drop-in
+# --------------------------------------------------------------
 echo "[6/8] Configuring SSH..."
 
-# Check and create .ssh folder
+# .ssh 目录与公钥
 if [ ! -d ~/.ssh ]; then
-    mkdir ~/.ssh
+    mkdir -p ~/.ssh
     chmod 700 ~/.ssh
     echo "✓ Created .ssh directory"
 fi
 
-# Check if authorized_keys file exists and if not, create it
 if [ ! -f ~/.ssh/authorized_keys ]; then
     touch ~/.ssh/authorized_keys
     chmod 600 ~/.ssh/authorized_keys
     echo "✓ Created authorized_keys file"
 fi
 
-# Check if public key already exists and if not, add it
-if ! grep -q "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJPz1R5Ubh/HvnylrJR+WuoVGlqYl9MC/4BIzz0jxzTa eddsa-key-General" ~/.ssh/authorized_keys; then
-    echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJPz1R5Ubh/HvnylrJR+WuoVGlqYl9MC/4BIzz0jxzTa eddsa-key-General" >> ~/.ssh/authorized_keys
-    echo "✓ SSH public key added"
+if [ -n "$SSH_PUBLIC_KEY" ] && [ "$SSH_PUBLIC_KEY" != "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... your-key-here" ]; then
+    if ! grep -qF "$SSH_PUBLIC_KEY" ~/.ssh/authorized_keys; then
+        echo "$SSH_PUBLIC_KEY" >> ~/.ssh/authorized_keys
+        echo "✓ SSH public key added"
+    else
+        echo "✓ SSH public key already exists"
+    fi
 else
-    echo "✓ SSH public key already exists"
+    echo "! SSH_PUBLIC_KEY not set — skipping key injection. Edit the script and set it before running,"
+    echo "  or you may lock yourself out once password auth is disabled."
 fi
 
-# Change ssh port
-if [ -f /etc/ssh/sshd_config ]; then
-    sed -i 's/#Port 22/Port 54321/g' /etc/ssh/sshd_config
-    sed -i 's/^Port 22/Port 54321/g' /etc/ssh/sshd_config
-    echo "✓ SSH port changed to 54321"
-fi
+# 用 sshd_config.d drop-in 而不是直接改 sshd_config
+SSHD_CONFIG_DIR="/etc/ssh/sshd_config.d"
+SSHD_DROPIN="${SSHD_CONFIG_DIR}/99-custom.conf"
 
-# Disable password login
-if [ -f /etc/ssh/sshd_config ]; then
-    sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/g' /etc/ssh/sshd_config
-    sed -i 's/^PasswordAuthentication yes/PasswordAuthentication no/g' /etc/ssh/sshd_config
-    echo "✓ Password authentication disabled"
-fi
+if [ -d "$SSHD_CONFIG_DIR" ] || [ -d /etc/ssh ]; then
+    mkdir -p "$SSHD_CONFIG_DIR"
 
-# Allow root login via SSH
-if [ -f /etc/ssh/sshd_config ]; then
-    sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/g' /etc/ssh/sshd_config
-    sed -i 's/^PermitRootLogin prohibit-password/PermitRootLogin yes/g' /etc/ssh/sshd_config
-    echo "✓ Root login via SSH enabled"
-fi
+    # 确保主配置文件有 Include 指令（大多数现代发行版默认已包含）
+    if [ -f /etc/ssh/sshd_config ] && ! grep -qE "^Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf" /etc/ssh/sshd_config; then
+        sed -i "1i Include /etc/ssh/sshd_config.d/*.conf" /etc/ssh/sshd_config
+        echo "✓ Added Include directive to sshd_config"
+    fi
 
-# Restart sshd service
-systemctl restart sshd
-echo "✓ SSH service restarted"
+    cat > "$SSHD_DROPIN" <<EOF
+# Managed by setup script — do not edit sshd_config directly for these options
+Port ${SSH_PORT}
+PasswordAuthentication no
+PermitRootLogin yes
+PubkeyAuthentication yes
+EOF
+    echo "✓ Wrote SSH drop-in config: $SSHD_DROPIN"
+
+    # 先校验语法，再重启，避免把自己锁在门外
+    if sshd -t; then
+        systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null
+        echo "✓ SSH service restarted (new port: ${SSH_PORT})"
+    else
+        echo "✗ sshd config test FAILED — reverting drop-in to avoid lockout"
+        rm -f "$SSHD_DROPIN"
+        echo "! SSH was NOT restarted. Please check /etc/ssh/sshd_config.d manually."
+    fi
+else
+    echo "! /etc/ssh not found, skipping SSH configuration"
+fi
 echo ""
 
-# Enable BBR
+# --------------------------------------------------------------
+# [7/8] BBR — 按系统版本区分实装方式
+# --------------------------------------------------------------
 echo "[7/8] Enabling BBR congestion control..."
 
-# Check kernel version (BBR requires kernel 4.9+)
 kernel_version=$(uname -r | cut -d. -f1)
 kernel_minor=$(uname -r | cut -d. -f2)
 
-if [ "$kernel_version" -lt 4 ] || ([ "$kernel_version" -eq 4 ] && [ "$kernel_minor" -lt 9 ]); then
+if [ "$kernel_version" -lt 4 ] || { [ "$kernel_version" -eq 4 ] && [ "$kernel_minor" -lt 9 ]; }; then
     echo "! Warning: BBR requires kernel 4.9+. Current: $(uname -r)"
     echo "! BBR may not work properly on this system"
 else
     echo "✓ Kernel version $(uname -r) supports BBR"
 fi
 
-# Enable BBR congestion control
-if ! grep -q "net.core.default_qdisc=fq" /etc/sysctl.conf; then
-    echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
+# 判断是否为 Debian 13 (trixie)
+is_debian13=false
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    if [ "${ID:-}" = "debian" ] && [ "${VERSION_ID:-}" = "13" ]; then
+        is_debian13=true
+    fi
 fi
 
-if ! grep -q "net.ipv4.tcp_congestion_control=bbr" /etc/sysctl.conf; then
-    echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
+if $is_debian13; then
+    echo "→ Detected Debian 13, using sysctl.d drop-in method"
+
+    # 确保内核模块已加载
+    modprobe tcp_bbr 2>/dev/null || true
+    if ! lsmod | grep -q "^tcp_bbr"; then
+        echo "! tcp_bbr module not loaded (may be built-in, continuing)"
+    fi
+
+    BBR_CONF="/etc/sysctl.d/99-bbr.conf"
+    cat > "$BBR_CONF" <<EOF
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+EOF
+    echo "✓ Wrote $BBR_CONF"
+
+    sysctl --system > /dev/null 2>&1
+else
+    echo "→ Using standard sysctl.conf method"
+
+    if ! grep -q "net.core.default_qdisc=fq" /etc/sysctl.conf 2>/dev/null; then
+        echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
+    fi
+    if ! grep -q "net.ipv4.tcp_congestion_control=bbr" /etc/sysctl.conf 2>/dev/null; then
+        echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
+    fi
+
+    sysctl -p > /dev/null 2>&1
 fi
 
-# Apply sysctl settings
-sysctl -p > /dev/null 2>&1
-
-# Verify BBR is enabled
-bbr_status=$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | awk '{print $3}')
+bbr_status=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)
 if [ "$bbr_status" = "bbr" ]; then
     echo "✓ BBR successfully enabled"
 else
@@ -211,13 +266,9 @@ else
 fi
 echo ""
 
-# Summary
-echo "[8/8] Cleanup..."
-# Remove self
-rm -- "$0"
-echo "✓ Script removed"
-echo ""
-
+# --------------------------------------------------------------
+# [8/8] Summary
+# --------------------------------------------------------------
 echo "=========================================="
 echo "  Configuration Complete!"
 echo "=========================================="
@@ -228,13 +279,15 @@ echo "  • Locale: C.UTF-8 (global)"
 echo "  • nano: Installed/Verified"
 echo "  • epel-release: Installed/Verified (if RHEL/CentOS)"
 echo "  • SELinux: Disabled"
-echo "  • SSH Port: 54321"
+echo "  • SSH Port: ${SSH_PORT} (via sshd_config.d/99-custom.conf)"
 echo "  • SSH Password Auth: Disabled"
 echo "  • SSH Root Login: Enabled"
 echo "  • BBR: Enabled"
 echo ""
-echo "⚠ IMPORTANT: Please reconnect using port 54321"
+echo "⚠ IMPORTANT: Please reconnect using port ${SSH_PORT} BEFORE closing this session"
 echo "⚠ SELinux and locale changes require a reboot to take full effect"
 echo "⚠ After reboot, verify locale with: locale"
+echo "⚠ This script was NOT self-deleted. Remove it manually once you've verified everything works:"
+echo "    rm -- \"$0\""
 echo ""
 echo "=========================================="
