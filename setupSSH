@@ -79,9 +79,9 @@ echo "Current locale: $(locale | grep LANG= | head -1)"
 echo ""
 
 # --------------------------------------------------------------
-# [3/8] nano
+# [3/8] nano & Default Editor
 # --------------------------------------------------------------
-echo "[3/8] Checking for nano..."
+echo "[3/8] Checking and configuring nano as default editor..."
 if ! command -v nano &> /dev/null; then
     echo "nano not found. Installing..."
     if command -v apt-get &> /dev/null; then
@@ -93,6 +93,36 @@ if ! command -v nano &> /dev/null; then
 else
     echo "✓ nano is already installed"
 fi
+
+# 设置环境变量 (当前 Session + 系统全局)
+export EDITOR=nano
+export VISUAL=nano
+
+# 写入 /etc/environment (供非 interactive shell 及 systemd 读取)
+if [ -f /etc/environment ]; then
+    grep -q "^EDITOR=" /etc/environment && sed -i 's/^EDITOR=.*/EDITOR=nano/g' /etc/environment || echo "EDITOR=nano" >> /etc/environment
+    grep -q "^VISUAL=" /etc/environment && sed -i 's/^VISUAL=.*/VISUAL=nano/g' /etc/environment || echo "VISUAL=nano" >> /etc/environment
+fi
+
+# 写入 /etc/profile (供全局 Shell 登录时读取)
+if ! grep -q "export EDITOR=nano" /etc/profile 2>/dev/null; then
+    {
+        echo ""
+        echo "# Set nano as default text editor"
+        echo "export EDITOR=nano"
+        echo "export VISUAL=nano"
+    } >> /etc/profile
+fi
+
+# 如果系统支持 update-alternatives (如 Debian/Ubuntu/RHEL)，同步更新系统的默认链接
+if command -v update-alternatives &> /dev/null; then
+    NANO_BIN=$(command -v nano)
+    if [ -n "$NANO_BIN" ]; then
+        update-alternatives --set editor "$NANO_BIN" 2>/dev/null || true
+    fi
+fi
+
+echo "✓ nano set as global default editor (EDITOR & VISUAL)"
 echo ""
 
 # --------------------------------------------------------------
@@ -276,7 +306,7 @@ echo ""
 echo "Summary of changes:"
 echo "  • Timezone: Asia/Shanghai"
 echo "  • Locale: C.UTF-8 (global)"
-echo "  • nano: Installed/Verified"
+echo "  • nano: Installed & set as default editor (EDITOR/VISUAL)"
 echo "  • epel-release: Installed/Verified (if RHEL/CentOS)"
 echo "  • SELinux: Disabled"
 echo "  • SSH Port: ${SSH_PORT} (via sshd_config.d/99-custom.conf)"
